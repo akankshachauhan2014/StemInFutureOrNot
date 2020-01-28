@@ -1,0 +1,82 @@
+
+### read the data
+train_all<-read.csv("labelled_training_data.csv")
+test_all<-read.csv("labelled_test_data.csv")
+
+## function to create features
+features_1 <-function(df){
+library(data.table)
+dft<-as.data.table(df)
+df_piv1 <-as.data.frame(dft[,.(isSTEM= max(isSTEM),
+AveCarelessness= mean(AveCarelessness),
+AveResFrust= mean(AveResFrust),
+hint = mean(hint),
+original = mean(original),
+frIsHelpRequest= sum(frIsHelpRequest)/max(totalFrAttempted)
+),by=list(ITEST_id)])
+return(df_piv1)
+}
+
+## Creating features
+df_piv1 <-features_1(train_all)
+test_piv1 <-features_1(test_all)
+
+# Storing the result in test_resultand removing the isSTEMvariable from test_piv1
+test_result<-test_piv1[,c(1,2)]
+test_piv1[,2] <-NULL
+
+## running the algorithm
+library(randomForest)
+Rf_train<-randomForest(formula = isSTEM~., data = df_piv1[,-1], importance = TRUE)
+Rf_test<-predict(Rf_train, test_piv1[,-(1)], type = "class")
+
+# Confusion Matrix for Random Forest
+tabRFtest<-table(Rf_test>0.5, test_result$isSTEM)
+rownames(tabRFtest) <-c("Predicted Non-STEM", "Predicted STEM")
+colnames(tabRFtest) <-c("Actual Non-STEM", "Actual STEM")
+tabRFtest
+RFaccuracy<-sum(diag(tabRFtest))/sum(tabRFtest)
+RFaccuracy
+RF.df<-as.data.frame(Rf_test)
+RF.df[,2] <-test_result[2]
+
+# Distribution of Students
+RF.df$Order<-1:nrow(RF.df)
+library(ggplot2)
+ggplot(RF.df, aes(x=Order, y=Rf_test, col=isSTEM)) + geom_point(size = 3.5) + labs(x ="Number of Students", 
+y = "Probability of puruseingSTEM", title = "Distribution of Students") + 
+theme(plot.title= element_text(hjust= 0.5))
+
+# Lift Chart
+RF.df<-RF.df[order(RF.df$Rf_test, decreasing = T),]
+library(caret)
+lift.test<-lift(relevel(as.factor(isSTEM),ref="1")~Rf_test,data=RF.df)
+xyplot(lift.test,plot="gain", main = "Lift chart for the Random Forest model")
+
+# Decile Chart
+RF.df$isSTEM<-as.numeric(RF.df$isSTEM)
+library(gains)
+gain <-gains(RF.df$isSTEM, RF.df$Rf_test)
+barplot(gain$mean.resp/ mean(RF.df$isSTEM), names.arg= gain$depth, xlab= "Percentile",
+ylab= "Mean Response", main = "Decile-wise lift chart", ylim= c(0,3.5))
+
+# Accuracy vs Cutoff graph
+library(ROCR)
+pred<-prediction(Rf_test, test_result$isSTEM)
+eval <-performance(pred,"acc")
+plot(eval, main = "Accuracy vs Cutoff graph")  
+abline(v=0.5)
+
+# ROC
+roc <-performance(pred,"tpr", "fpr")
+plot(roc,
+main="ROC Curve",
+ylab= "Sensitivity",
+xlab= "1 -Specificity")
+abline(a=0,b=1)
+
+# Calculating AUC
+auc<-performance(pred,"auc")
+auc<-unlist(slot(auc,"y.values"))
+auc
+
